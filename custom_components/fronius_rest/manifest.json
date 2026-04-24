@@ -1,0 +1,13 @@
+{
+  "domain": "fronius_rest",
+  "name": "Fronius Gen24",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "config_flow": true,
+  "dependencies": [],
+  "requirements": [],
+  "version": "1.0.0",
+  "documentation": "https://github.com/obsoolete/fronius_rest",
+  "issue_tracker": "https://github.com/obsoolete/fronius_rest/issues",
+  "codeowners": ["@obsoolete"]
+}

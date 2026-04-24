@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Fronius Gen24",
+        "data": {
+          "host": "Host or IP address",
+          "username": "Username",
+          "password": "Password",
+          "scan_interval": "Poll interval"
+        },
+        "data_description": {
+          "host": "The IP address or hostname of your Fronius Gen24 inverter, e.g. 192.168.1.100",
+          "username": "Select the account role. Technician is required to toggle switches and write settings.",
+          "password": "The password for the inverter web interface account",
+          "scan_interval": "How often to poll the inverter for updated state, in seconds (5–120)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the inverter",
+      "invalid_auth": "Invalid username or password",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This inverter is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fronius Gen24 options",
+        "data": {
+          "scan_interval": "Poll interval"
+        },
+        "data_description": {
+          "scan_interval": "How often to poll the inverter for updated state, in seconds (5–120)"
+        }
+      }
+    }
+  }
+}
