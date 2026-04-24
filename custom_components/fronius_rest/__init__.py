@@ -6,7 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import CONF_SCAN_INTERVAL, DOMAIN
 from .coordinator import FroniusCoordinator
 
 PLATFORMS: list[Platform] = [Platform.NUMBER, Platform.SENSOR, Platform.SWITCH]
@@ -27,10 +27,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload only when the scan interval option actually changes."""
+    if CONF_SCAN_INTERVAL not in entry.options:
+        return
     coordinator: FroniusCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator is None:
         return
-    new_interval = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+    new_interval = int(entry.options[CONF_SCAN_INTERVAL])
     current_interval = int(coordinator.update_interval.total_seconds())
     if new_interval != current_interval:
         await hass.config_entries.async_reload(entry.entry_id)
