@@ -29,11 +29,3 @@ The export power limit is remembered across restarts. Changes made while export 
 Go to **Settings → Devices & Services → Add Integration → Fronius Gen24** and enter your inverter's IP address, username (`technician` or `customer`), password, and preferred poll interval.
 
 > Write operations (switches, export limit) require the **Technician** role.
-
-## Troubleshooting
-
-```yaml
-logger:
-  logs:
-    custom_components.fronius_rest: debug
-```
