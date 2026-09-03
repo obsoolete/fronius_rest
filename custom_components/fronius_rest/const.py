@@ -3,12 +3,14 @@
 DOMAIN = "fronius_rest"
 
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_RESOLVED_IP = "resolved_ip"
 
 DEFAULT_SCAN_INTERVAL = 30
 MIN_SCAN_INTERVAL = 5
 MAX_SCAN_INTERVAL = 120
 
 REQUEST_TIMEOUT = 10
+DNS_TIMEOUT = 5
 
 # Coordinator data keys
 DATA_PV_ENABLED = "pv_enabled"

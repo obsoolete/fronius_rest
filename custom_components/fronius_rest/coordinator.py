@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import secrets
+import socket
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
+from yarl import URL
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -24,6 +27,7 @@ from .const import (
     API_POWERUNIT,
     API_VERSION,
     CONF_LAST_EXPORT_LIMIT,
+    CONF_RESOLVED_IP,
     CONF_SCAN_INTERVAL,
     DATA_EXPORT_ENABLED,
     DATA_EXPORT_POWER_LIMIT,
@@ -31,6 +35,7 @@ from .const import (
     DATA_PV_ENABLED,
     DATA_SW_VERSION,
     DEFAULT_SCAN_INTERVAL,
+    DNS_TIMEOUT,
     DOMAIN,
     REQUEST_TIMEOUT,
 )
@@ -39,6 +44,49 @@ _LOGGER = logging.getLogger(__name__)
 
 # Key under which the coordinator is stored in hass.data
 CONF_HOST = "host"
+
+
+def _normalize_base_url(host: str) -> URL:
+    """Return a normalized HTTP URL for a hostname, IPv4, or IPv6 input."""
+    value = host.strip().rstrip("/")
+    try:
+        address = ipaddress.ip_address(value.strip("[]"))
+    except ValueError:
+        url = URL(value if "://" in value else f"http://{value}")
+    else:
+        url = URL.build(scheme="http", host=str(address))
+
+    if url.scheme != "http" or url.host is None:
+        raise ValueError("Host must be a DNS hostname, IPv4 address, or IPv6 address")
+    return url
+
+
+def _is_ip_address(host: str) -> bool:
+    """Return whether host is a literal IPv4 or IPv6 address."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+async def _async_resolve_host(url: URL) -> str:
+    """Resolve a configured URL host to one concrete IP address."""
+    host = url.host
+    if host is None:
+        raise socket.gaierror("URL has no host")
+    if _is_ip_address(host):
+        return host
+
+    async with asyncio.timeout(DNS_TIMEOUT):
+        addresses = await asyncio.get_running_loop().getaddrinfo(
+            host,
+            url.port or 80,
+            type=socket.SOCK_STREAM,
+        )
+    if not addresses:
+        raise socket.gaierror(f"No addresses returned for {host}")
+    return addresses[0][4][0]
 
 
 def _parse_digest_challenge(challenge: str) -> dict[str, str]:
@@ -103,10 +151,9 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=scan_interval),
         )
 
-        host = config_entry.data[CONF_HOST].rstrip("/")
-        if not host.startswith("http://"):
-            host = f"http://{host}"
-        self.base_url: str = host
+        self._configured_url = _normalize_base_url(config_entry.data[CONF_HOST])
+        self.base_url = str(self._configured_url).rstrip("/")
+        self._resolved_ip: str | None = config_entry.data.get(CONF_RESOLVED_IP)
         self.username: str = config_entry.data[CONF_USERNAME]
         self.password: str = config_entry.data[CONF_PASSWORD]
         self.session = async_get_clientsession(hass)
@@ -114,6 +161,39 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._device_name: str = "Fronius Gen24"
         self._serial_number: str | None = None
         self._sw_version: str | None = None
+
+    async def _async_request_target(self) -> tuple[str, dict[str, str]]:
+        """Select a concrete request URL and preserve the configured Host header."""
+        configured_host = self._configured_url.host
+        if configured_host is None or _is_ip_address(configured_host):
+            return self.base_url, {}
+
+        try:
+            resolved_ip = await _async_resolve_host(self._configured_url)
+        except (TimeoutError, socket.gaierror, OSError) as err:
+            if self._resolved_ip is None:
+                raise UpdateFailed(
+                    f"DNS lookup failed for {configured_host} and no cached IP is available"
+                ) from err
+            resolved_ip = self._resolved_ip
+            _LOGGER.warning(
+                "DNS lookup failed for %s; using cached IP %s",
+                configured_host,
+                resolved_ip,
+            )
+        else:
+            if resolved_ip != self._resolved_ip:
+                self._resolved_ip = resolved_ip
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data={
+                        **self.config_entry.data,
+                        CONF_RESOLVED_IP: resolved_ip,
+                    },
+                )
+
+        request_url = str(self._configured_url.with_host(resolved_ip)).rstrip("/")
+        return request_url, {"Host": self._configured_url.raw_authority}
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -136,9 +216,14 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("Previous request still in progress")
 
         async with self._request_lock:
-            await self._fetch_version_info()
-            powerunit = await self._digest_request("GET", API_POWERUNIT)
-            power_limits = await self._digest_request("GET", API_POWER_LIMITS)
+            request_url, request_headers = await self._async_request_target()
+            await self._fetch_version_info(request_url, request_headers)
+            powerunit = await self._digest_request(
+                "GET", API_POWERUNIT, request_url, request_headers
+            )
+            power_limits = await self._digest_request(
+                "GET", API_POWER_LIMITS, request_url, request_headers
+            )
 
         try:
             mppt = powerunit["mppt"]
@@ -182,7 +267,10 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         try:
             async with self._request_lock:
-                await self._digest_request("POST", API_POWERUNIT, payload)
+                request_url, request_headers = await self._async_request_target()
+                await self._digest_request(
+                    "POST", API_POWERUNIT, request_url, request_headers, payload
+                )
         except (UpdateFailed, TimeoutError, aiohttp.ClientError) as err:
             raise HomeAssistantError(f"Failed to set PV mode: {err}") from err
         if self.data is not None:
@@ -234,7 +322,10 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         try:
             async with self._request_lock:
-                await self._digest_request("POST", API_POWER_LIMITS, payload)
+                request_url, request_headers = await self._async_request_target()
+                await self._digest_request(
+                    "POST", API_POWER_LIMITS, request_url, request_headers, payload
+                )
         except (UpdateFailed, TimeoutError, aiohttp.ClientError) as err:
             raise HomeAssistantError(f"Failed to set export limitation: {err}") from err
         if self.data is not None:
@@ -270,7 +361,10 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         try:
             async with self._request_lock:
-                await self._digest_request("POST", API_POWER_LIMITS, payload)
+                request_url, request_headers = await self._async_request_target()
+                await self._digest_request(
+                    "POST", API_POWER_LIMITS, request_url, request_headers, payload
+                )
         except (UpdateFailed, TimeoutError, aiohttp.ClientError) as err:
             raise HomeAssistantError(f"Failed to set export power limit: {err}") from err
         if self.data is not None:
@@ -282,25 +376,30 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_setup(self) -> None:
         """Fetch initial device metadata from the version endpoint."""
         try:
-            await self._fetch_version_info()
+            request_url, request_headers = await self._async_request_target()
+            await self._fetch_version_info(request_url, request_headers)
         except UpdateFailed as err:
             _LOGGER.warning("Could not fetch version info during setup: %s", err)
 
-    async def _fetch_version_info(self) -> None:
+    async def _fetch_version_info(
+        self, request_url: str, request_headers: dict[str, str]
+    ) -> None:
         """Fetch and cache device name, serial number, and GEN24 software version."""
-        data = await self._plain_get(API_VERSION)
+        data = await self._plain_get(API_VERSION, request_url, request_headers)
         self._device_name = str(data.get("devicename") or "Fronius Gen24")
         serial = data.get("serialNumber")
         self._serial_number = str(serial) if serial else None
         sw_revisions = data.get("swrevisions") or {}
         self._sw_version = sw_revisions.get("GEN24")
 
-    async def _plain_get(self, uri: str) -> dict[str, Any]:
+    async def _plain_get(
+        self, uri: str, request_url: str, request_headers: dict[str, str]
+    ) -> dict[str, Any]:
         """Make an unauthenticated GET request and return the parsed JSON body."""
-        url = f"{self.base_url}{uri}"
+        url = f"{request_url}{uri}"
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
-                resp = await self.session.get(url)
+                resp = await self.session.get(url, headers=request_headers)
                 resp.raise_for_status()
                 return await resp.json(content_type=None)
         except aiohttp.ClientResponseError as err:
@@ -312,6 +411,8 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         method: str,
         uri: str,
+        request_url: str,
+        request_headers: dict[str, str],
         json_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Make a digest-authenticated request to the inverter.
@@ -319,12 +420,14 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Performs the two-step digest auth handshake: HEAD to obtain the
         challenge, then the real request with the computed Authorization header.
         """
-        url = f"{self.base_url}{uri}"
+        url = f"{request_url}{uri}"
 
         # Step 1: HEAD request to obtain the WWW-Authenticate challenge.
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
-                challenge_resp = await self.session.head(url)
+                challenge_resp = await self.session.head(
+                    url, headers=request_headers
+                )
         except (TimeoutError, aiohttp.ClientError) as err:
             raise UpdateFailed(f"Auth challenge failed for {uri}: {err}") from err
 
@@ -340,6 +443,7 @@ class FroniusCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         params = _parse_digest_challenge(challenge_header)
         auth_value = _compute_digest_auth(method, uri, self.username, self.password, params)
         headers = {
+            **request_headers,
             "Authorization": auth_value,
             "Content-Type": "application/json",
         }

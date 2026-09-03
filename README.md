@@ -26,6 +26,12 @@ The export power limit is remembered across restarts. Changes made while export 
 
 ## Setup
 
-Go to **Settings → Devices & Services → Add Integration → Fronius Gen24** and enter your inverter's IP address, username (`technician` or `customer`), password, and preferred poll interval.
+Go to **Settings → Devices & Services → Add Integration → Fronius Gen24** and enter your inverter's DNS hostname, IPv4 address, or IPv6 address, username (`technician` or `customer`), password, and preferred poll interval.
+
+When configured with a DNS hostname, the integration stores the last successfully resolved IP address. It refreshes that address while DNS is available and uses the cached address during a DNS outage. A literal IP address bypasses DNS entirely.
+
+An existing hostname-based entry must resolve successfully once after upgrading to seed its fallback address. Initial configuration also requires working DNS because no address has been cached yet.
+
+To change the address or credentials later, open **Settings → Devices & Services**, select the Fronius Gen24 integration, and choose **Reconfigure** from its menu. The new connection is validated before the existing entry is updated and reloaded.
 
 > Write operations (switches, export limit) require the **Technician** role.

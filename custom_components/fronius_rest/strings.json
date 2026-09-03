@@ -4,16 +4,29 @@
       "user": {
         "title": "Connect to Fronius Gen24",
         "data": {
-          "host": "Host or IP address",
+          "host": "DNS hostname or IP address",
           "username": "Username",
           "password": "Password",
           "scan_interval": "Poll interval"
         },
         "data_description": {
-          "host": "The IP address or hostname of your Fronius Gen24 inverter, e.g. 192.168.1.100",
+          "host": "The DNS hostname, IPv4 address, or IPv6 address of your inverter. Hostnames retain their last resolved IP as a fallback during DNS outages.",
           "username": "Select the account role. Technician is required to toggle switches and write settings.",
           "password": "The password for the inverter web interface account",
           "scan_interval": "How often to poll the inverter for updated state, in seconds (5–120)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Fronius Gen24",
+        "data": {
+          "host": "DNS hostname or IP address",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "host": "The new DNS hostname, IPv4 address, or IPv6 address of your inverter.",
+          "username": "Select the account role. Technician is required to toggle switches and write settings.",
+          "password": "The password for the inverter web interface account"
         }
       }
     },
@@ -23,13 +36,16 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "This inverter is already configured"
+      "already_configured": "This inverter is already configured",
+      "reconfigure_successful": "The Fronius Gen24 configuration was updated",
+      "unique_id_mismatch": "The address belongs to a different inverter"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Fronius Gen24 options",
+        "description": "To change the inverter address, username, or password, use Reconfigure from the integration menu.",
         "data": {
           "scan_interval": "Poll interval"
         },
